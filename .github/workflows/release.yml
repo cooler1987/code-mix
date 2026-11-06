@@ -1,6 +1,5 @@
 name: Build Desktop Portable Release
 
-# 修正：現在只要您推播（Push）程式碼到 main 或 master 分支，Actions 就會立刻啟動！
 on:
   push:
     branches:
@@ -9,7 +8,6 @@ on:
     tags:
       - 'v*'
 
-# 修正：強制開啟寫入權限，否則 GitHub 會報錯拒絕自動上傳編譯好的 exe 壓縮包
 permissions:
   contents: write
 
@@ -25,15 +23,19 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
-          flutter-version: '3.24.x' # 修正：鎖定相容於您 pubspec 套件的穩定 Flutter 版本
+          flutter-version: '3.24.x'
 
       - name: 啟用 Windows 桌面端支援
         run: flutter config --enable-windows-desktop
 
+      # 🔥 關鍵修正：在編譯前，強制讓 Flutter 在當前目錄自動生成缺少的 windows 原生專案結構
+      - name: 自動補全 Windows 平台專案結構
+        run: flutter create --platforms=windows .
+
       - name: 獲取依賴套件
         run: flutter pub get
 
-      - name: 編編綠色便攜版 (Release)
+      - name: 編譯綠色便攜版 (Release)
         run: flutter build windows --release
 
       - name: 打包成 ZIP 壓縮檔
@@ -42,7 +44,6 @@ jobs:
           cd build/windows/x64/runner/Release/
           zip -r ../../../../../repomix-flutter-windows-portable.zip .
 
-      # 修正：使用更穩定的上傳機制，不管有沒有打 tag 都能自動生成一個名為 "latest" 的發布頁面
       - name: 自動發布到 GitHub Release
         uses: softprops/action-gh-release@v2
         with:
