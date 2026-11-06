@@ -1,22 +1,35 @@
 import 'dart:convert';
 import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:path/path.dart' as p;
 import 'package:archive/archive.dart';
+import 'package:desktop_drop/desktop_drop.dart';
+import 'package:window_manager/window_manager.dart';
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await windowManager.ensureInitialized();
+  WindowOptions windowOptions = const WindowOptions(
+    size: Size(700, 380),
+    minimumSize: Size(700, 380),
+    maximumSize: Size(700, 380),
+    center: true,
+    title: "Repomix Portable Clone",
+  );
+  windowManager.waitUntilReadyToShow(windowOptions, () async {
+    await windowManager.show();
+    await windowManager.focus();
+  });
   runApp(const MyApp());
 }
 
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
-
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Repomix Flutter Clone',
+      title: 'Repomix Clone',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         brightness: Brightness.dark,
@@ -29,559 +42,255 @@ class MyApp extends StatelessWidget {
     );
   }
 }
-
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
-
   @override
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  int _selectedInputType = 1; // 0: Git URL, 1: Folder, 2: Zip
+  int _selectedInputType = 1; // 0: 連結, 1: 資料夾, 2: 壓縮包
   String _selectedPathOrUrl = '';
-  String _displayPath = '點擊選擇本地專案資料夾...';
+  String _displayPath = '點擊或拖放本地專案資料夾至此...';
   String _outputFormat = 'Markdown';
   bool _includeSummary = true;
   bool _includeStructure = true;
-  String _statusMessage = '就緒。請選擇輸入源開始打包。';
+  String _statusMessage = '就緒。支援拖放資料夾或 ZIP 壓縮包。';
   bool _isProcessing = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _updateDisplayPlaceholder();
-  }
+  bool _isDragging = false;
 
   void _updateDisplayPlaceholder() {
     if (_selectedInputType == 0) {
-      _displayPath = _selectedPathOrUrl.isEmpty
-          ? '請輸入 GitHub 倉庫克隆連結...'
-          : _selectedPathOrUrl;
+      _displayPath = _selectedPathOrUrl.isEmpty ? '請輸入 GitHub 倉庫克隆連結...' : _selectedPathOrUrl;
     } else if (_selectedInputType == 1) {
-      _displayPath = _selectedPathOrUrl.isEmpty
-          ? '點擊選擇本地專案資料夾...'
-          : p.basename(_selectedPathOrUrl);
+      _displayPath = _selectedPathOrUrl.isEmpty ? '點擊或拖放本地專案資料夾至此...' : p.basename(_selectedPathOrUrl);
     } else {
-      _displayPath = _selectedPathOrUrl.isEmpty
-          ? '點擊選擇本地專案 .zip 壓縮檔案...'
-          : p.basename(_selectedPathOrUrl);
+      _displayPath = _selectedPathOrUrl.isEmpty ? '點擊或拖放本地專案 .zip 檔案至此...' : p.basename(_selectedPathOrUrl);
     }
   }
 
-  Future<void> _handlePathSelection() async {
-    if (_selectedInputType == 1) {
-      final selectedDirectory =
-          await FilePicker.platform.getDirectoryPath(
-        dialogTitle: '選擇程式碼專案資料夾',
-      );
-
-      if (selectedDirectory != null) {
-        setState(() {
-          _selectedPathOrUrl = selectedDirectory;
-          _updateDisplayPlaceholder();
-        });
-      }
-    } else if (_selectedInputType == 2) {
-      final result = await FilePicker.platform.pickFiles(
-        type: FileType.custom,
-        allowedExtensions: ['zip'],
-        dialogTitle: '選擇項目的 ZIP 壓縮包',
-      );
-
-      if (result != null && result.files.single.path != null) {
-        setState(() {
-          _selectedPathOrUrl = result.files.single.path!;
-          _updateDisplayPlaceholder();
-        });
-      }
-    } else {
-      _showUrlDialog();
-    }
+  String _getExpectedExtension() {
+    if (_outputFormat == 'XML') return 'xml';
+    if (_outputFormat == 'Markdown') return 'md';
+    return 'txt';
   }
-
-  void _showUrlDialog() {
-    final urlController = TextEditingController(text: _selectedPathOrUrl);
-
-    showDialog(
-      context: context,
-      builder: (context) => AppAlertDialog(
-        urlController: urlController,
-        onConfirm: (value) {
-          setState(() {
-            _selectedPathOrUrl = value;
-            _updateDisplayPlaceholder();
-          });
-        },
-      ),
-    );
-  }
-
-  Future<void> _startPacking() async {
-    if (_selectedPathOrUrl.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('請先選擇或輸入程式碼來源！')),
-      );
-      return;
-    }
-
-    final outputFile = await FilePicker.platform.saveFile(
-      dialogTitle: '儲存打包結果',
-      fileName: 'codebase_for_llm.txt',
-      type: FileType.custom,
-      allowedExtensions: ['txt', 'md', 'xml'],
-    );
-
-    if (outputFile == null) return;
-
-    setState(() {
-      _isProcessing = true;
-      _statusMessage = '正在處理打包，請稍候...';
-    });
-
-    try {
-      String targetDirPath = _selectedPathOrUrl;
-      Directory? tempDir;
-
-      if (_selectedInputType == 2) {
-        tempDir = Directory(
-          p.join(Directory.systemTemp.path, 'repomix_flutter_extracted'),
-        );
-
-        if (tempDir.existsSync()) {
-          tempDir.deleteSync(recursive: true);
-        }
-        tempDir.createSync();
-
-        final bytes = File(_selectedPathOrUrl).readAsBytesSync();
-        final archive = ZipDecoder().decodeBytes(bytes);
-
-        for (final file in archive) {
-          final filename = file.name;
-
-          if (file.isFile) {
-            final data = file.content as List<int>;
-            final filePath = p.join(tempDir.path, filename);
-
-            File(filePath)
-              ..createSync(recursive: true)
-              ..writeAsBytesSync(data);
-          } else {
-            Directory(p.join(tempDir.path, filename)).createSync(recursive: true);
-          }
-        }
-
-        targetDirPath = tempDir.path;
-      } else if (_selectedInputType == 0) {
-        tempDir = Directory(
-          p.join(Directory.systemTemp.path, 'repomix_flutter_git'),
-        );
-
-        if (tempDir.existsSync()) {
-          tempDir.deleteSync(recursive: true);
-        }
-
-        setState(() => _statusMessage = '正在複製遠端倉庫 (需本地安裝 Git)...');
-
-        final result = await Process.run(
-          'git',
-          ['clone', '--depth', '1', _selectedPathOrUrl, tempDir.path],
-        );
-
-        if (result.exitCode != 0) {
-          throw Exception('Git 複製失敗: ${result.stderr}');
-        }
-
-        targetDirPath = tempDir.path;
-      }
-
-      final finalBuffer = StringBuffer();
-      final sourceDir = Directory(targetDirPath);
-      const defaultIgnore = [
-        '.git',
-        'node_modules',
-        'build',
-        'dist',
-        '.png',
-        '.jpg',
-        '.jpeg',
-        '.zip',
-        '.exe',
-        '.dll',
-      ];
-
-      final allEntities = sourceDir.listSync(recursive: true);
-      final validFiles = <File>[];
-
-      for (final entity in allEntities) {
-        if (entity is File) {
-          final relPath = p.relative(entity.path, from: targetDirPath);
-          final shouldIgnore = defaultIgnore.any(
-            (pattern) =>
-                relPath.contains(pattern) ||
-                p.basename(relPath).startsWith('.'),
-          );
-
-          if (!shouldIgnore) {
-            validFiles.add(entity);
-          }
-        }
-      }
-
-      validFiles.sort((a, b) => a.path.compareTo(b.path));
-
-      if (_includeStructure) {
-        finalBuffer.writeln('=== DIRECTORY STRUCTURE ===');
-        for (final file in validFiles) {
-          final relPath = p
-              .relative(file.path, from: targetDirPath)
-              .replaceAll('\\', '/');
-          finalBuffer.writeln('- $relPath');
-        }
-        finalBuffer.writeln('===========================\n');
-      }
-
-      if (_includeSummary) {
-        finalBuffer.writeln('=== FILE SUMMARY ===');
-        for (final file in validFiles) {
-          final relPath = p
-              .relative(file.path, from: targetDirPath)
-              .replaceAll('\\', '/');
-          finalBuffer.writeln('Path: $relPath');
-        }
-        finalBuffer.writeln('====================\n');
-      }
-
-      finalBuffer.writeln('=== CODEBASE CONTENT ===\n');
-
-      for (final file in validFiles) {
-        final relPath = p
-            .relative(file.path, from: targetDirPath)
-            .replaceAll('\\', '/');
-
-        String content = '';
-        try {
-          content = file.readAsStringSync(encoding: utf8);
-        } catch (_) {
-          continue;
-        }
-
-        if (_outputFormat == 'XML') {
-          finalBuffer.writeln('<file path="$relPath">');
-          finalBuffer.writeln(content);
-          finalBuffer.writeln('</file>\n');
-        } else if (_outputFormat == 'Markdown') {
-          final extensionName = p.extension(file.path).replaceAll('.', '');
-          finalBuffer.writeln('### File: $relPath');
-          finalBuffer.writeln('`$extensionName`');
-          finalBuffer.writeln(content);
-          finalBuffer.writeln();
-        } else {
-          finalBuffer.writeln('--- START OF FILE: $relPath ---');
-          finalBuffer.writeln(content);
-          finalBuffer.writeln('--- END OF FILE: $relPath ---\n');
-        }
-      }
-
-      await File(outputFile).writeAsString(finalBuffer.toString());
-
-      if (tempDir != null && tempDir.existsSync()) {
-        tempDir.deleteSync(recursive: true);
-      }
-
-      setState(() {
-        _statusMessage = '🎉 打包成功！已儲存至: ${p.basename(outputFile)}';
-        _isProcessing = false;
-      });
-    } catch (e) {
-      setState(() {
-        _statusMessage = '❌ 錯誤: ${e.toString()}';
-        _isProcessing = false;
-      });
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
-    return Scaffold(
-      body: Center(
-        child: Container(
-          width: 750,
-          padding: const EdgeInsets.all(30),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Text(
-                'Repomix',
-                style: TextStyle(
-                  color: theme.primaryColor,
-                  fontSize: 38,
-                  fontWeight: FontWeight.bold,
-                  letterSpacing: 1.2,
-                ),
-              ),
-              const SizedBox(height: 5),
-              Text(
-                'Pack your codebase into AI-friendly formats',
-                style: TextStyle(
-                  color: theme.hintColor,
-                  fontSize: 16,
-                ),
-              ),
-              const SizedBox(height: 35),
-              Container(
-                decoration: BoxDecoration(
-                  color: theme.cardColor,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(
-                    color: const Color(0xFF2D2F34),
-                    width: 1,
-                  ),
-                ),
-                padding: const EdgeInsets.all(20),
-                child: Column(
-                  children: [
-                    Row(
-                      children: [
-                        ToggleButtons(
-                          isSelected: [
-                            _selectedInputType == 0,
-                            _selectedInputType == 1,
-                            _selectedInputType == 2,
-                          ],
-                          onPressed: (index) {
-                            setState(() {
-                              _selectedInputType = index;
-                              _selectedPathOrUrl = '';
-                              _updateDisplayPlaceholder();
-                            });
-                          },
-                          fillColor: theme.primaryColor,
-                          selectedColor: Colors.white,
-                          color: theme.hintColor,
-                          borderRadius: BorderRadius.circular(6),
-                          constraints: const BoxConstraints(
-                            minWidth: 55,
-                            minHeight: 36,
-                          ),
-                          children: const [
-                            Icon(Icons.link, size: 18),
-                            Icon(Icons.folder_open, size: 18),
-                            Icon(Icons.inventory_2_outlined, size: 18),
-                          ],
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: InkWell(
-                            onTap: _isProcessing ? null : _handlePathSelection,
-                            child: Container(
-                              height: 36,
-                              padding:
-                                  const EdgeInsets.symmetric(horizontal: 12),
-                              decoration: BoxDecoration(
-                                border: Border.all(
-                                  color: const Color(0xFF40434A),
-                                  width: 1,
-                                ),
-                                borderRadius: BorderRadius.circular(6),
-                              ),
-                              alignment: Alignment.centerLeft,
-                              child: Text(
-                                _displayPath,
-                                style: TextStyle(
-                                  color: _selectedPathOrUrl.isEmpty
-                                      ? theme.hintColor
-                                      : theme.primaryColor,
-                                  fontSize: 13,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        ElevatedButton.icon(
-                          onPressed: _isProcessing ? null : _startPacking,
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: theme.primaryColor,
-                            foregroundColor: Colors.white,
-                            minimumSize: const Size(95, 36),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(6),
-                            ),
-                          ),
-                          icon: const Icon(Icons.all_inclusive, size: 16),
-                          label: const Text(
-                            'Pack',
-                            style: TextStyle(fontWeight: FontWeight.bold),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        IconButton(
-                          onPressed: () {
-                            setState(() {
-                              _selectedPathOrUrl = '';
-                              _updateDisplayPlaceholder();
-                              _statusMessage = '狀態已重置。';
-                            });
-                          },
-                          icon: const Icon(Icons.refresh, size: 20),
-                          style: IconButton.styleFrom(
-                            backgroundColor: const Color(0xFF2D2F34),
-                            foregroundColor: Colors.white,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(6),
-                            ),
-                            minimumSize: const Size(36, 36),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 25),
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'Output Format',
-                              style: TextStyle(
-                                color: theme.hintColor,
-                                fontSize: 11,
-                              ),
-                            ),
-                            const SizedBox(height: 6),
-                            ToggleButtons(
-                              isSelected: [
-                                _outputFormat == 'XML',
-                                _outputFormat == 'Markdown',
-                                _outputFormat == 'Plain',
-                              ],
-                              onPressed: (index) {
-                                final formats = ['XML', 'Markdown', 'Plain'];
-                                setState(() {
-                                  _outputFormat = formats[index];
-                                });
-                              },
-                              fillColor: theme.primaryColor,
-                              selectedColor: Colors.white,
-                              color: theme.hintColor,
-                              borderRadius: BorderRadius.circular(6),
-                              constraints: const BoxConstraints(
-                                minWidth: 80,
-                                minHeight: 32,
-                              ),
-                              children: const [
-                                Text('XML'),
-                                Text('Markdown'),
-                                Text('Plain'),
-                              ],
-                            ),
-                          ],
-                        ),
-                        const Spacer(),
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'Output Format Options',
-                              style: TextStyle(
-                                color: theme.hintColor,
-                                fontSize: 11,
-                              ),
-                            ),
-                            const SizedBox(height: 2),
-                            Row(
-                              children: [
-                                Checkbox(
-                                  value: _includeSummary,
-                                  activeColor: theme.primaryColor,
-                                  onChanged: (value) {
-                                    setState(() {
-                                      _includeSummary = value ?? true;
-                                    });
-                                  },
-                                ),
-                                const Text(
-                                  'Include File Summary',
-                                  style: TextStyle(fontSize: 13),
-                                ),
-                              ],
-                            ),
-                            Row(
-                              children: [
-                                Checkbox(
-                                  value: _includeStructure,
-                                  activeColor: theme.primaryColor,
-                                  onChanged: (value) {
-                                    setState(() {
-                                      _includeStructure = value ?? true;
-                                    });
-                                  },
-                                ),
-                                const Text(
-                                  'Include Directory Structure',
-                                  style: TextStyle(fontSize: 13),
-                                ),
-                              ],
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 30),
-              Text(
-                _statusMessage,
-                style: const TextStyle(
-                  color: Color(0xFF606060),
-                  fontSize: 12,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
+Future _handlePathSelection() async {
+if (_selectedInputType == 1) {
+String? dir = await FilePicker.platform.getDirectoryPath(dialogTitle: '選擇專案資料夾');
+if (dir != null) setState(() { _selectedPathOrUrl = dir; _updateDisplayPlaceholder(); });
+} else if (_selectedInputType == 2) {
+FilePickerResult? res = await FilePicker.platform.pickFiles(type: FileType.custom, allowedExtensions: ['zip']);
+if (res != null && res.files.single.path != null) setState(() { _selectedPathOrUrl = res.files.single.path!; _updateDisplayPlaceholder(); });
+} else {
+_showUrlDialog();
 }
-
-class AppAlertDialog extends StatelessWidget {
-  final TextEditingController urlController;
-  final void Function(String) onConfirm;
-
-  const AppAlertDialog({
-    super.key,
-    required this.urlController,
-    required this.onConfirm,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text('輸入 Git 倉庫連結'),
-      content: TextField(
-        controller: urlController,
-        decoration: const InputDecoration(hintText: 'https://github.com'),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('取消'),
-        ),
-        TextButton(
-          onPressed: () {
-            onConfirm(urlController.text);
-            Navigator.pop(context);
-          },
-          child: const Text('確定'),
-        ),
-      ],
-    );
-  }
+}
+void _showUrlDialog() {
+TextEditingController ctrl = TextEditingController(text: _selectedPathOrUrl);
+showDialog(
+context: context,
+builder: (ctx) => AlertDialog(
+title: const Text('輸入 Git 倉庫連結'),
+content: TextField(controller: ctrl, decoration: const InputDecoration(hintText: "https://github.com")),
+actions: [
+TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
+TextButton(onPressed: () { setState(() { _selectedPathOrUrl = ctrl.text; _updateDisplayPlaceholder(); }); Navigator.pop(ctx); }, child: const Text('確定')),
+],
+),
+);
+}
+Future _startPacking() async {
+if (_selectedPathOrUrl.isEmpty) return;
+String? out = await FilePicker.platform.saveFile(
+dialogTitle: '儲存打包結果',
+fileName: 'codebase.' + _getExpectedExtension(),
+type: FileType.custom,
+allowedExtensions: [_getExpectedExtension()],
+);
+if (out == null) return;
+setState(() { _isProcessing = true; _statusMessage = '正在打包中...'; });
+try {
+String target = _selectedPathOrUrl;
+Directory? temp;
+if (_selectedInputType == 2) {
+temp = Directory(p.join(Directory.systemTemp.path, 'repomix_extracted'));
+if (temp.existsSync()) temp.deleteSync(recursive: true);
+temp.createSync();
+final bytes = File(_selectedPathOrUrl).readAsBytesSync();
+final archive = ZipDecoder().decodeBytes(bytes);
+for (final file in archive) {
+if (file.isFile) {
+File(p.join(temp.path, file.name))..createSync(recursive: true)..writeAsBytesSync(file.content as List);
+}
+}
+target = temp.path;
+} else if (_selectedInputType == 0) {
+temp = Directory(p.join(Directory.systemTemp.path, 'repomix_git'));
+if (temp.existsSync()) temp.deleteSync(recursive: true);
+ProcessResult res = await Process.run('git', ['clone', '--depth', '1', _selectedPathOrUrl, temp.path]);
+if (res.exitCode != 0) throw Exception('Git Clone 失敗');
+target = temp.path;
+}
+final buffer = StringBuffer();
+final sourceDir = Directory(target);
+final ignore = ['.git', 'node_modules', 'build', 'dist', '.png', '.jpg', '.zip', '.exe'];
+List entities = sourceDir.listSync(recursive: true);
+List files = [];
+for (var e in entities) {
+if (e is File) {
+String rel = p.relative(e.path, from: target);
+if (!ignore.any((p) => rel.contains(p) || p.basename(rel).startsWith('.'))) files.add(e);
+}
+}
+files.sort((a, b) => a.path.compareTo(b.path));
+if (_includeStructure) {
+buffer.writeln("=== DIRECTORY STRUCTURE ===");
+for (var f in files) buffer.writeln("- " + p.relative(f.path, from: target).replaceAll('\', '/'));
+buffer.writeln("===========================\n");
+}
+if (includeSummary) {
+buffer.writeln("=== FILE SUMMARY ===");
+for (var f in files) buffer.writeln("Path: " + p.relative(f.path, from: target).replaceAll('\', '/'));
+buffer.writeln("====================\n");
+}
+buffer.writeln("=== CODEBASE CONTENT ===\n");
+for (var f in files) {
+String rel = p.relative(f.path, from: target).replaceAll('\', '/');
+String text = '';
+try { text = f.readAsStringSync(encoding: utf8); } catch () { continue; }
+if (_outputFormat == 'XML') {
+buffer.writeln('\n' + text + '\n\n');
+} else if (_outputFormat == 'Markdown') {
+String ext = p.extension(f.path).replaceAll('.', '');
+buffer.writeln('### File: ' + rel + '\n' + ext + '\n' + text + '\n\n');
+} else {
+buffer.writeln('--- START: ' + rel + ' ---\n' + text + '\n--- END ---\n');
+}
+}
+await File(out).writeAsString(buffer.toString());
+if (temp != null && temp.existsSync()) temp.deleteSync(recursive: true);
+setState(() { _statusMessage = '🎉 打包成功！已儲存至：' + p.basename(out); _isProcessing = false; });
+} catch (e) {
+setState(() { _statusMessage = '❌ 錯誤：' + e.toString(); _isProcessing = false; });
+}
+}
+@override
+Widget build(BuildContext context) {
+final theme = Theme.of(context);
+return Scaffold(
+body: Center(
+child: Container(
+width: 660,
+padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 30),
+child: Column(
+mainAxisAlignment: MainAxisAlignment.center,
+children: [
+Text('Repomix', style: TextStyle(color: theme.primaryColor, fontSize: 32, fontWeight: FontWeight.bold)),
+Text('Pack your codebase into AI-friendly formats', style: TextStyle(color: theme.hintColor, fontSize: 13)),
+const SizedBox(height: 20),
+DropTarget(
+onDragEntered: (details) => setState(() => _isDragging = true),
+onDragExited: (details) => setState(() => _isDragging = false),
+onDragDone: (details) {
+setState(() { _isDragging = false; });
+if (details.files.isNotEmpty) {
+final path = details.files.first.path;
+setState(() {
+_selectedPathOrUrl = path;
+if (path.endsWith('.zip')) { _selectedInputType = 2; } else { _selectedInputType = 1; }
+_updateDisplayPlaceholder();
+});
+}
+},
+child: Container(
+decoration: BoxDecoration(
+color: _isDragging ? const Color(0xFF25272C) : theme.cardColor,
+borderRadius: BorderRadius.circular(8),
+border: Border.all(color: _isDragging ? theme.primaryColor : const Color(0xFF2D2F34), width: 1),
+),
+padding: const EdgeInsets.all(15),
+child: Column(
+children: [
+Row(
+children: [
+ToggleButtons(
+isSelected: [_selectedInputType == 0, _selectedInputType == 1, _selectedInputType == 2],
+onPressed: (idx) => setState(() { _selectedInputType = idx; _selectedPathOrUrl = ''; _updateDisplayPlaceholder(); }),
+fillColor: theme.primaryColor, selectedColor: Colors.white, color: theme.hintColor,
+borderRadius: BorderRadius.circular(6), constraints: const BoxConstraints(minWidth: 45, minHeight: 36),
+children: const [Icon(Icons.link, size: 16), Icon(Icons.folder_open, size: 16), Icon(Icons.inventory_2, size: 16)],
+),
+const SizedBox(width: 10),
+Expanded(
+child: InkWell(
+onTap: _isProcessing ? null : _handlePathSelection,
+child: Container(
+height: 36, padding: const EdgeInsets.symmetric(horizontal: 10),
+decoration: BoxDecoration(border: Border.all(color: const Color(0xFF40434A)), borderRadius: BorderRadius.circular(6)),
+alignment: Alignment.centerLeft,
+child: Text(_displayPath, style: TextStyle(color: _selectedPathOrUrl.isEmpty ? theme.hintColor : theme.primaryColor, fontSize: 12, overflow: TextOverflow.ellipsis)),
+),
+),
+),
+const SizedBox(width: 10),
+ElevatedButton(
+onPressed: _isProcessing ? null : _startPacking,
+style: ElevatedButton.styleFrom(backgroundColor: theme.primaryColor, foregroundColor: Colors.white, minimumSize: const Size(80, 36), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6))),
+child: const Text('Pack', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+),
+const SizedBox(width: 5),
+IconButton(
+onPressed: () => setState(() { _selectedPathOrUrl = ''; _updateDisplayPlaceholder(); _statusMessage = '狀態已重置。'; }),
+icon: const Icon(Icons.refresh, size: 18),
+style: IconButton.styleFrom(backgroundColor: const Color(0xFF2D2F34), foregroundColor: Colors.white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)), minimumSize: const Size(36, 36)),
+)
+],
+),
+const SizedBox(height: 15),
+Row(
+crossAxisAlignment: CrossAxisAlignment.start,
+children: [
+Column(
+crossAxisAlignment: CrossAxisAlignment.start,
+children: [
+Text('Output Format', style: TextStyle(color: theme.hintColor, fontSize: 11)),
+const SizedBox(height: 5),
+ToggleButtons(
+isSelected: [_outputFormat == 'XML', _outputFormat == 'Markdown', _outputFormat == 'Plain'],
+onPressed: (idx) { final f = ['XML', 'Markdown', 'Plain']; setState(() => _outputFormat = f[idx]); },
+fillColor: theme.primaryColor, selectedColor: Colors.white, color: theme.hintColor,
+borderRadius: BorderRadius.circular(6), constraints: const BoxConstraints(minWidth: 70, minHeight: 30),
+children: const [Text('XML', style: TextStyle(fontSize: 11)), Text('Markdown', style: TextStyle(fontSize: 11)), Text('Plain', style: TextStyle(fontSize: 11))],
+),
+],
+),
+const Spacer(),
+Column(
+crossAxisAlignment: CrossAxisAlignment.start,
+children: [
+Text('Output Format Options', style: TextStyle(color: theme.hintColor, fontSize: 11)),
+Row(children: [
+SizedBox(height: 24, width: 24, child: Checkbox(value: _includeSummary, activeColor: theme.primaryColor, onChanged: (v) => setState(() => _includeSummary = v ?? true))),
+const Text(' Include File Summary', style: TextStyle(fontSize: 12)),
+]),
+Row(children: [
+SizedBox(height: 24, width: 24, child: Checkbox(value: _includeStructure, activeColor: theme.primaryColor, onChanged: (v) => setState(() => _includeStructure = v ?? true))),
+const Text(' Include Directory Structure', style: TextStyle(fontSize: 12)),
+]),
+],
+),
+],
+),
+],
+),
+),
+),
+const SizedBox(height: 15),
+Text(_statusMessage, style: const TextStyle(color: Color(0xFF606060), fontSize: 11, fontWeight: FontWeight.w500)),
+],
+),
+),
+),
+);
+}
 }
