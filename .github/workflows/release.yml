@@ -1,0 +1,43 @@
+name: Build Desktop Portable Release
+
+on:
+  push:
+    tags:
+      - 'v*' # 當你推播帶有 v1.0.0 這樣的標籤時，自動觸發編譯
+
+jobs:
+  build-windows:
+    runs-on: windows-2022 # 使用 GitHub 的 Windows 伺服器
+
+    steps:
+      - name: 複製程式碼
+        uses: actions/checkout@v4
+
+      - name: 配置 Flutter 環境
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          flutter-version: '3.x' # 自動安裝最新穩定版 Flutter
+
+      - name: 啟用 Windows 桌面端支援
+        run: flutter config --enable-windows-desktop
+
+      - name: 獲取依賴套件
+        run: flutter pub get
+
+      - name: 編譯綠色便攜版 (Release)
+        run: flutter build windows --release
+
+      - name: 打包成 ZIP 壓縮檔
+        shell: bash
+        run: |
+          # 進入編譯輸出的目錄，將 exe 和依賴的 dll 壓成一個綠色包
+          cd build/windows/x64/runner/Release/
+          zip -r ../../../../../repomix-flutter-windows-portable.zip .
+
+      - name: 自動發布到 GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: repomix-flutter-windows-portable.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
