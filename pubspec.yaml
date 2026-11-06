@@ -1,0 +1,20 @@
+name: repomix_flutter_clone
+description: A portable codebase packer for LLM prompts built with Flutter.
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  file_picker: ^8.1.7         # 彈出 Windows 資料夾選擇器
+  path: ^1.9.0                # 跨平台路徑解析
+  archive: ^3.6.1             # 讀取解壓上傳的 .zip 檔
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+flutter:
+  uses-material-design: true
