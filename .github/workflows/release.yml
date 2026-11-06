@@ -28,9 +28,9 @@ jobs:
       - name: 啟用 Windows 桌面端支援
         run: flutter config --enable-windows-desktop
 
-      # 🔥 關鍵修正：在編譯前，強制讓 Flutter 在當前目錄自動生成缺少的 windows 原生專案結構
+      # 🔥 終極修正：加上 --project-name 參數，徹底解決 GitHub 倉庫帶橫槓 - 導致命名非法（code-mix）的問題
       - name: 自動補全 Windows 平台專案結構
-        run: flutter create --platforms=windows .
+        run: flutter create --platforms=windows --project-name=code_mix .
 
       - name: 獲取依賴套件
         run: flutter pub get
