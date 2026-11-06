@@ -38,14 +38,14 @@ jobs:
       - name: 編譯綠色便攜版 (Release)
         run: flutter build windows --release
 
+      # 🔥 核心修正：改用 Windows 自帶的 PowerShell 指令進行打包，徹底解決 zip command not found 的問題
       - name: 打包成 ZIP 壓縮檔
-        shell: bash
         run: |
-          cd build/windows/x64/runner/Release/
-          zip -r ../../../../../repomix-flutter-windows-portable.zip .
+          Compress-Archive -Path build\windows\x64\runner\Release\* -DestinationPath repomix-flutter-windows-portable.zip -Force
 
       - name: 自動發布到 GitHub Release
         uses: softprops/action-gh-release@v2
+
         with:
           files: repomix-flutter-windows-portable.zip
           tag_name: latest
