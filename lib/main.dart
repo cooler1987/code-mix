@@ -56,7 +56,7 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  int _selectedInputType = 1; // 0: 連結, 1: 資料夾, 2: 壓縮包
+  int _selectedInputType = 1;
   String _selectedPathOrUrl = '';
   String _displayPath = '點擊或拖放本地專案資料夾至此...';
   String _outputFormat = 'Markdown';
@@ -88,7 +88,6 @@ class _HomeScreenState extends State<HomeScreen> {
     return 'txt';
   }
 
-  /// 自動根據拖入的資料夾、壓縮檔或連結生成「同名 + 日期」的檔名
   String _generateDefaultFileName() {
     String baseName = 'codebase';
     final cleanInput = _selectedPathOrUrl.trim();
@@ -97,7 +96,8 @@ class _HomeScreenState extends State<HomeScreen> {
       if (_selectedInputType == 0) {
         final uri = Uri.tryParse(cleanInput);
         if (uri != null && uri.pathSegments.isNotEmpty) {
-          final lastSeg = uri.pathSegments.lastWhere((s) => s.isNotEmpty, orElse: () => 'codebase');
+          final lastSeg = uri.pathSegments
+              .lastWhere((s) => s.isNotEmpty, orElse: () => 'codebase');
           baseName = lastSeg.replaceAll(RegExp(r'\.git$'), '');
         }
       } else if (_selectedInputType == 2) {
@@ -237,8 +237,12 @@ class _HomeScreenState extends State<HomeScreen> {
       final buffer = StringBuffer();
       final sourceDir = Directory(target);
 
-      const ignoreDirs = {'.git', 'node_modules', 'build', 'dist', '.dart_tool', '.idea', '.vscode'};
-      const ignoreExts = {'.png', '.jpg', '.jpeg', '.gif', '.ico', '.zip', '.exe', '.dll', '.so', '.dylib'};
+      const ignoreDirs = {
+        '.git', 'node_modules', 'build', 'dist', '.dart_tool', '.idea', '.vscode'
+      };
+      const ignoreExts = {
+        '.png', '.jpg', '.jpeg', '.gif', '.ico', '.zip', '.exe', '.dll', '.so', '.dylib'
+      };
 
       final entities = sourceDir.listSync(recursive: true);
       final files = <File>[];
@@ -250,9 +254,11 @@ class _HomeScreenState extends State<HomeScreen> {
           final fileName = p.basename(relativePath);
           final ext = p.extension(fileName).toLowerCase();
 
-          final inIgnoredDir = pathSegments.any((segment) => ignoreDirs.contains(segment));
+          final inIgnoredDir =
+              pathSegments.any((segment) => ignoreDirs.contains(segment));
           final hasIgnoredExt = ignoreExts.contains(ext);
-          final isHiddenSystemFile = fileName == '.DS_Store' || fileName == 'Thumbs.db';
+          final isHiddenSystemFile =
+              fileName == '.DS_Store' || fileName == 'Thumbs.db';
 
           if (!inIgnoredDir && !hasIgnoredExt && !isHiddenSystemFile) {
             files.add(entity);
@@ -281,7 +287,8 @@ class _HomeScreenState extends State<HomeScreen> {
       buffer.writeln('=== CODEBASE CONTENT ===\n');
 
       for (final file in files) {
-        final relativePath = p.relative(file.path, from: target).replaceAll('\\', '/');
+        final relativePath =
+            p.relative(file.path, from: target).replaceAll('\\', '/');
         String text = '';
 
         try {
@@ -343,28 +350,34 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
               const SizedBox(height: 20),
               DropTarget(
-                onDragEntered: (DropEventDetails _) =>
-                    setState(() => _isDragging = true),
-                onDragExited: () => setState(() => _isDragging = false),
-                onDragDone: (DropDoneDetails details) {
-                  setState(() {
-                    _isDragging = false;
-                  });
+                onDragEntered: (details) {
+                  setState(() => _isDragging = true);
+                },
+                onDragExited: (details) {
+                  setState(() => _isDragging = false);
+                },
+                onDragDone: (details) {
+                  setState(() => _isDragging = false);
                   if (details.files.isNotEmpty) {
                     final path = details.files.first.path;
                     setState(() {
                       _selectedPathOrUrl = path;
-                      _selectedInputType = path.toLowerCase().endsWith('.zip') ? 2 : 1;
+                      _selectedInputType =
+                          path.toLowerCase().endsWith('.zip') ? 2 : 1;
                       _updateDisplayPlaceholder();
                     });
                   }
                 },
                 child: Container(
                   decoration: BoxDecoration(
-                    color: _isDragging ? const Color(0xFF25272C) : theme.cardColor,
+                    color: _isDragging
+                        ? const Color(0xFF25272C)
+                        : theme.cardColor,
                     borderRadius: BorderRadius.circular(8),
                     border: Border.all(
-                      color: _isDragging ? theme.primaryColor : const Color(0xFF2D2F34),
+                      color: _isDragging
+                          ? theme.primaryColor
+                          : const Color(0xFF2D2F34),
                       width: 1,
                     ),
                   ),
@@ -390,7 +403,8 @@ class _HomeScreenState extends State<HomeScreen> {
                             selectedColor: Colors.white,
                             color: theme.hintColor,
                             borderRadius: BorderRadius.circular(6),
-                            constraints: const BoxConstraints(minWidth: 45, minHeight: 36),
+                            constraints:
+                                const BoxConstraints(minWidth: 45, minHeight: 36),
                             children: const [
                               Icon(Icons.link, size: 16),
                               Icon(Icons.folder_open, size: 16),
@@ -403,9 +417,11 @@ class _HomeScreenState extends State<HomeScreen> {
                               onTap: _isProcessing ? null : _handlePathSelection,
                               child: Container(
                                 height: 36,
-                                padding: const EdgeInsets.symmetric(horizontal: 10),
+                                padding:
+                                    const EdgeInsets.symmetric(horizontal: 10),
                                 decoration: BoxDecoration(
-                                  border: Border.all(color: const Color(0xFF40434A)),
+                                  border: Border.all(
+                                      color: const Color(0xFF40434A)),
                                   borderRadius: BorderRadius.circular(6),
                                 ),
                                 alignment: Alignment.centerLeft,
@@ -435,7 +451,8 @@ class _HomeScreenState extends State<HomeScreen> {
                             ),
                             child: const Text(
                               'Pack',
-                              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                              style: TextStyle(
+                                  fontWeight: FontWeight.bold, fontSize: 12),
                             ),
                           ),
                           const SizedBox(width: 5),
@@ -468,7 +485,8 @@ class _HomeScreenState extends State<HomeScreen> {
                             children: [
                               Text(
                                 'Output Format',
-                                style: TextStyle(color: theme.hintColor, fontSize: 11),
+                                style:
+                                    TextStyle(color: theme.hintColor, fontSize: 11),
                               ),
                               const SizedBox(height: 5),
                               ToggleButtons(
@@ -485,10 +503,12 @@ class _HomeScreenState extends State<HomeScreen> {
                                 selectedColor: Colors.white,
                                 color: theme.hintColor,
                                 borderRadius: BorderRadius.circular(6),
-                                constraints: const BoxConstraints(minWidth: 70, minHeight: 30),
+                                constraints: const BoxConstraints(
+                                    minWidth: 70, minHeight: 30),
                                 children: const [
                                   Text('XML', style: TextStyle(fontSize: 11)),
-                                  Text('Markdown', style: TextStyle(fontSize: 11)),
+                                  Text('Markdown',
+                                      style: TextStyle(fontSize: 11)),
                                   Text('Plain', style: TextStyle(fontSize: 11)),
                                 ],
                               ),
@@ -500,7 +520,8 @@ class _HomeScreenState extends State<HomeScreen> {
                             children: [
                               Text(
                                 'Output Format Options',
-                                style: TextStyle(color: theme.hintColor, fontSize: 11),
+                                style:
+                                    TextStyle(color: theme.hintColor, fontSize: 11),
                               ),
                               Row(
                                 children: [
@@ -510,8 +531,8 @@ class _HomeScreenState extends State<HomeScreen> {
                                     child: Checkbox(
                                       value: _includeSummary,
                                       activeColor: theme.primaryColor,
-                                      onChanged: (v) =>
-                                          setState(() => _includeSummary = v ?? true),
+                                      onChanged: (v) => setState(
+                                          () => _includeSummary = v ?? true),
                                     ),
                                   ),
                                   const Text(
@@ -528,8 +549,8 @@ class _HomeScreenState extends State<HomeScreen> {
                                     child: Checkbox(
                                       value: _includeStructure,
                                       activeColor: theme.primaryColor,
-                                      onChanged: (v) =>
-                                          setState(() => _includeStructure = v ?? true),
+                                      onChanged: (v) => setState(
+                                          () => _includeStructure = v ?? true),
                                     ),
                                   ),
                                   const Text(
