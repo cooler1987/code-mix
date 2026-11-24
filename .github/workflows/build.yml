@@ -1,0 +1,34 @@
+name: Build Portable EXE (x64)
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Build single-file portable EXE
+        env:
+          RUSTFLAGS: -C target-feature=+crt-static
+        run: cargo build --release --target x86_64-pc-windows-msvc
+
+      - name: Show EXE size
+        shell: pwsh
+        run: Get-Item target/x86_64-pc-windows-msvc/release/repomix-portable.exe | Select-Object Name, Length
+
+      - name: Upload EXE artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: repomix-portable-win-x64
+          path: target/x86_64-pc-windows-msvc/release/repomix-portable.exe
