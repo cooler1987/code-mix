@@ -88,6 +88,39 @@ class _HomeScreenState extends State<HomeScreen> {
     return 'txt';
   }
 
+  /// 自動根據拖入的資料夾、壓縮檔或連結生成「同名 + 日期」的檔名
+  String _generateDefaultFileName() {
+    String baseName = 'codebase';
+    final cleanInput = _selectedPathOrUrl.trim();
+
+    if (cleanInput.isNotEmpty) {
+      if (_selectedInputType == 0) {
+        // 處理 GitHub 網址 (例如 https://github.com)
+        final uri = Uri.tryParse(cleanInput);
+        if (uri != null && uri.pathSegments.isNotEmpty) {
+          final lastSeg = uri.pathSegments.lastWhere((s) => s.isNotEmpty, orElse: () => 'codebase');
+          baseName = lastSeg.replaceAll(RegExp(r'\.git$'), '');
+        }
+      } else if (_selectedInputType == 2) {
+        // 處理 ZIP 壓縮檔，去除副檔名
+        baseName = p.basenameWithoutExtension(cleanInput);
+      } else {
+        // 處理資料夾，去除末尾可能存在的斜線後取得資料夾名稱
+        final normalized = cleanInput.replaceAll(RegExp(r'[\\/]+$'), '');
+        baseName = p.basename(normalized);
+      }
+    }
+
+    if (baseName.isEmpty) baseName = 'codebase';
+
+    // 取得當天日期 (YYYY-MM-DD)
+    final now = DateTime.now();
+    final dateStr =
+        '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+
+    return '${baseName}_$dateStr.${_getExpectedExtension()}';
+  }
+
   Future<void> _handlePathSelection() async {
     if (_selectedInputType == 1) {
       final dir = await FilePicker.platform.getDirectoryPath(
@@ -152,7 +185,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
     final outputPath = await FilePicker.platform.saveFile(
       dialogTitle: '儲存打包結果',
-      fileName: 'codebase.${_getExpectedExtension()}',
+      fileName: _generateDefaultFileName(), // 套用新的自動命名規則
       type: FileType.custom,
       allowedExtensions: [_getExpectedExtension()],
     );
@@ -207,7 +240,10 @@ class _HomeScreenState extends State<HomeScreen> {
 
       final buffer = StringBuffer();
       final sourceDir = Directory(target);
-      const ignore = ['.git', 'node_modules', 'build', 'dist', '.png', '.jpg', '.zip', '.exe'];
+      
+      // 修正：區分「要忽略的資料夾名稱」與「要忽略的副檔名」
+      const ignoreDirs = {'.git', 'node_modules', 'build', 'dist', '.dart_tool', '.idea', '.vscode'};
+      const ignoreExts = {'.png', '.jpg', '.jpeg', '.gif', '.ico', '.zip', '.exe', '.dll', '.so', '.dylib'};
 
       final entities = sourceDir.listSync(recursive: true);
       final files = <File>[];
@@ -215,13 +251,18 @@ class _HomeScreenState extends State<HomeScreen> {
       for (final entity in entities) {
         if (entity is File) {
           final relativePath = p.relative(entity.path, from: target);
+          final pathSegments = p.split(relativePath);
           final fileName = p.basename(relativePath);
+          final ext = p.extension(fileName).toLowerCase();
 
-          final shouldIgnore = ignore.any(
-            (pattern) => relativePath.contains(pattern) || fileName.startsWith('.'),
-          );
+          // 1. 精準比對資料夾名稱（不會再把 .github 誤判為 .git）
+          final inIgnoredDir = pathSegments.any((segment) => ignoreDirs.contains(segment));
+          // 2. 檢查是否為二進位圖檔或執行檔
+          final hasIgnoredExt = ignoreExts.contains(ext);
+          // 3. 排除一般隱藏檔（如 .DS_Store），但保留 .gitignore 等常見設定檔，或依需求放行
+          final isHiddenSystemFile = fileName == '.DS_Store' || fileName == 'Thumbs.db';
 
-          if (!shouldIgnore) {
+          if (!inIgnoredDir && !hasIgnoredExt && !isHiddenSystemFile) {
             files.add(entity);
           }
         }
@@ -258,10 +299,10 @@ class _HomeScreenState extends State<HomeScreen> {
         }
 
         if (_outputFormat == 'XML') {
-          buffer.writeln('\n$text\n\n');
+          buffer.writeln('<file path="$relativePath">\n$text\n</file>\n');
         } else if (_outputFormat == 'Markdown') {
           final ext = p.extension(file.path).replaceAll('.', '');
-          buffer.writeln('### File: $relativePath\n$ext\n$text\n\n');
+          buffer.writeln('### File: $relativePath\n```$ext\n$text\n```\n');
         } else {
           buffer.writeln('--- START: $relativePath ---\n$text\n--- END ---\n');
         }
@@ -277,256 +318,253 @@ class _HomeScreenState extends State<HomeScreen> {
         _statusMessage = '🎉 打包成功！已儲存至：${p.basename(outputPath)}';
         _isProcessing = false;
       });
-    } catch (e) {
-      setState(() {
-        _statusMessage = '❌ 錯誤：$e';
-        _isProcessing = false;
-      });
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
-    return Scaffold(
-      body: Center(
-        child: Container(
-          width: 660,
-          padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 30),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Text(
-                'Repomix',
-                style: TextStyle(
-                  color: theme.primaryColor,
-                  fontSize: 32,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              Text(
-                'Pack your codebase into AI-friendly formats',
-                style: TextStyle(color: theme.hintColor, fontSize: 13),
-              ),
-              const SizedBox(height: 20),
-              DropTarget(
-                onDragEntered: (_) => setState(() => _isDragging = true),
-                onDragExited: (_) => setState(() => _isDragging = false),
-                onDragDone: (details) {
-                  setState(() {
-                    _isDragging = false;
-                  });
-
-                  if (details.files.isNotEmpty) {
-                    final path = details.files.first.path;
-                    setState(() {
-                      _selectedPathOrUrl = path;
-                      _selectedInputType = path.endsWith('.zip') ? 2 : 1;
-                      _updateDisplayPlaceholder();
-                    });
-                  }
-                },
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: _isDragging ? const Color(0xFF25272C) : theme.cardColor,
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(
-                      color: _isDragging ? theme.primaryColor : const Color(0xFF2D2F34),
-                      width: 1,
-                    ),
-                  ),
-                  padding: const EdgeInsets.all(15),
-                  child: Column(
-                    children: [
-                      Row(
-                        children: [
-                          ToggleButtons(
-                            isSelected: [
-                              _selectedInputType == 0,
-                              _selectedInputType == 1,
-                              _selectedInputType == 2,
-                            ],
-                            onPressed: (idx) {
-                              setState(() {
-                                _selectedInputType = idx;
-                                _selectedPathOrUrl = '';
-                                _updateDisplayPlaceholder();
-                              });
-                            },
-                            fillColor: theme.primaryColor,
-                            selectedColor: Colors.white,
-                            color: theme.hintColor,
-                            borderRadius: BorderRadius.circular(6),
-                            constraints: const BoxConstraints(minWidth: 45, minHeight: 36),
-                            children: const [
-                              Icon(Icons.link, size: 16),
-                              Icon(Icons.folder_open, size: 16),
-                              Icon(Icons.inventory_2, size: 16),
-                            ],
-                          ),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: InkWell(
-                              onTap: _isProcessing ? null : _handlePathSelection,
-                              child: Container(
-                                height: 36,
-                                padding: const EdgeInsets.symmetric(horizontal: 10),
-                                decoration: BoxDecoration(
-                                  border: Border.all(color: const Color(0xFF40434A)),
-                                  borderRadius: BorderRadius.circular(6),
-                                ),
-                                alignment: Alignment.centerLeft,
-                                child: Text(
-                                  _displayPath,
-                                  style: TextStyle(
-                                    color: _selectedPathOrUrl.isEmpty
-                                        ? theme.hintColor
-                                        : theme.primaryColor,
-                                    fontSize: 12,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 10),
-                          ElevatedButton(
-                            onPressed: _isProcessing ? null : _startPacking,
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: theme.primaryColor,
-                              foregroundColor: Colors.white,
-                              minimumSize: const Size(80, 36),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(6),
-                              ),
-                            ),
-                            child: const Text(
-                              'Pack',
-                              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
-                            ),
-                          ),
-                          const SizedBox(width: 5),
-                          IconButton(
-                            onPressed: () {
-                              setState(() {
-                                _selectedPathOrUrl = '';
-                                _updateDisplayPlaceholder();
-                                _statusMessage = '狀態已重置。';
-                              });
-                            },
-                            icon: const Icon(Icons.refresh, size: 18),
-                            style: IconButton.styleFrom(
-                              backgroundColor: const Color(0xFF2D2F34),
-                              foregroundColor: Colors.white,
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(6),
-                              ),
-                              minimumSize: const Size(36, 36),
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 15),
-                      Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                'Output Format',
-                                style: TextStyle(color: theme.hintColor, fontSize: 11),
-                              ),
-                              const SizedBox(height: 5),
-                              ToggleButtons(
-                                isSelected: [
-                                  _outputFormat == 'XML',
-                                  _outputFormat == 'Markdown',
-                                  _outputFormat == 'Plain',
-                                ],
-                                onPressed: (idx) {
-                                  final formats = ['XML', 'Markdown', 'Plain'];
-                                  setState(() => _outputFormat = formats[idx]);
-                                },
-                                fillColor: theme.primaryColor,
-                                selectedColor: Colors.white,
-                                color: theme.hintColor,
-                                borderRadius: BorderRadius.circular(6),
-                                constraints: const BoxConstraints(minWidth: 70, minHeight: 30),
-                                children: const [
-                                  Text('XML', style: TextStyle(fontSize: 11)),
-                                  Text('Markdown', style: TextStyle(fontSize: 11)),
-                                  Text('Plain', style: TextStyle(fontSize: 11)),
-                                ],
-                              ),
-                            ],
-                          ),
-                          const Spacer(),
-                          Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                'Output Format Options',
-                                style: TextStyle(color: theme.hintColor, fontSize: 11),
-                              ),
-                              Row(
-                                children: [
-                                  SizedBox(
-                                    height: 24,
-                                    width: 24,
-                                    child: Checkbox(
-                                      value: _includeSummary,
-                                      activeColor: theme.primaryColor,
-                                      onChanged: (v) =>
-                                          setState(() => _includeSummary = v ?? true),
-                                    ),
-                                  ),
-                                  const Text(
-                                    ' Include File Summary',
-                                    style: TextStyle(fontSize: 12),
-                                  ),
-                                ],
-                              ),
-                              Row(
-                                children: [
-                                  SizedBox(
-                                    height: 24,
-                                    width: 24,
-                                    child: Checkbox(
-                                      value: _includeStructure,
-                                      activeColor: theme.primaryColor,
-                                      onChanged: (v) =>
-                                          setState(() => _includeStructure = v ?? true),
-                                    ),
-                                  ),
-                                  const Text(
-                                    ' Include Directory Structure',
-                                    style: TextStyle(fontSize: 12),
-                                  ),
-                                ],
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              const SizedBox(height: 15),
-              Text(
-                _statusMessage,
-                style: const TextStyle(
-                  color: Color(0xFF606060),
-                  fontSize: 11,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
+} catch (e) {
+setState(() {
+_statusMessage = '❌ 錯誤：$e';
+_isProcessing = false;
+});
+}
+}
+@override
+Widget build(BuildContext context) {
+final theme = Theme.of(context);
+return Scaffold(
+body: Center(
+child: Container(
+width: 660,
+padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 30),
+child: Column(
+mainAxisAlignment: MainAxisAlignment.center,
+children: [
+Text(
+'Repomix',
+style: TextStyle(
+color: theme.primaryColor,
+fontSize: 32,
+fontWeight: FontWeight.bold,
+),
+),
+Text(
+'Pack your codebase into AI-friendly formats',
+style: TextStyle(color: theme.hintColor, fontSize: 13),
+),
+const SizedBox(height: 20),
+DropTarget(
+onDragEntered: (_) => setState(() => isDragging = true),
+onDragExited: () => setState(() => _isDragging = false),
+onDragDone: (details) {
+setState(() {
+_isDragging = false;
+});
+if (details.files.isNotEmpty) {
+final path = details.files.first.path;
+setState(() {
+_selectedPathOrUrl = path;
+_selectedInputType = path.toLowerCase().endsWith('.zip') ? 2 : 1;
+_updateDisplayPlaceholder();
+});
+}
+},
+child: Container(
+decoration: BoxDecoration(
+color: _isDragging ? const Color(0xFF25272C) : theme.cardColor,
+borderRadius: BorderRadius.circular(8),
+border: Border.all(
+color: _isDragging ? theme.primaryColor : const Color(0xFF2D2F34),
+width: 1,
+),
+),
+padding: const EdgeInsets.all(15),
+child: Column(
+children: [
+Row(
+children: [
+ToggleButtons(
+isSelected: [
+_selectedInputType == 0,
+_selectedInputType == 1,
+_selectedInputType == 2,
+],
+onPressed: (idx) {
+setState(() {
+_selectedInputType = idx;
+_selectedPathOrUrl = '';
+_updateDisplayPlaceholder();
+});
+},
+fillColor: theme.primaryColor,
+selectedColor: Colors.white,
+color: theme.hintColor,
+borderRadius: BorderRadius.circular(6),
+constraints: const BoxConstraints(minWidth: 45, minHeight: 36),
+children: const [
+Icon(Icons.link, size: 16),
+Icon(Icons.folder_open, size: 16),
+Icon(Icons.inventory_2, size: 16),
+],
+),
+const SizedBox(width: 10),
+Expanded(
+child: InkWell(
+onTap: _isProcessing ? null : _handlePathSelection,
+child: Container(
+height: 36,
+padding: const EdgeInsets.symmetric(horizontal: 10),
+decoration: BoxDecoration(
+border: Border.all(color: const Color(0xFF40434A)),
+borderRadius: BorderRadius.circular(6),
+),
+alignment: Alignment.centerLeft,
+child: Text(
+_displayPath,
+style: TextStyle(
+color: _selectedPathOrUrl.isEmpty
+? theme.hintColor
+: theme.primaryColor,
+fontSize: 12,
+overflow: TextOverflow.ellipsis,
+),
+),
+),
+),
+),
+const SizedBox(width: 10),
+ElevatedButton(
+onPressed: _isProcessing ? null : _startPacking,
+style: ElevatedButton.styleFrom(
+backgroundColor: theme.primaryColor,
+foregroundColor: Colors.white,
+minimumSize: const Size(80, 36),
+shape: RoundedRectangleBorder(
+borderRadius: BorderRadius.circular(6),
+),
+),
+child: const Text(
+'Pack',
+style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+),
+),
+const SizedBox(width: 5),
+IconButton(
+onPressed: () {
+setState(() {
+_selectedPathOrUrl = '';
+_updateDisplayPlaceholder();
+_statusMessage = '狀態已重置。';
+});
+},
+icon: const Icon(Icons.refresh, size: 18),
+style: IconButton.styleFrom(
+backgroundColor: const Color(0xFF2D2F34),
+foregroundColor: Colors.white,
+shape: RoundedRectangleBorder(
+borderRadius: BorderRadius.circular(6),
+),
+minimumSize: const Size(36, 36),
+),
+),
+],
+),
+const SizedBox(height: 15),
+Row(
+crossAxisAlignment: CrossAxisAlignment.start,
+children: [
+Column(
+crossAxisAlignment: CrossAxisAlignment.start,
+children: [
+Text(
+'Output Format',
+style: TextStyle(color: theme.hintColor, fontSize: 11),
+),
+const SizedBox(height: 5),
+ToggleButtons(
+isSelected: [
+_outputFormat == 'XML',
+_outputFormat == 'Markdown',
+_outputFormat == 'Plain',
+],
+onPressed: (idx) {
+final formats = ['XML', 'Markdown', 'Plain'];
+setState(() => _outputFormat = formats[idx]);
+},
+fillColor: theme.primaryColor,
+selectedColor: Colors.white,
+color: theme.hintColor,
+borderRadius: BorderRadius.circular(6),
+constraints: const BoxConstraints(minWidth: 70, minHeight: 30),
+children: const [
+Text('XML', style: TextStyle(fontSize: 11)),
+Text('Markdown', style: TextStyle(fontSize: 11)),
+Text('Plain', style: TextStyle(fontSize: 11)),
+],
+),
+],
+),
+const Spacer(),
+Column(
+crossAxisAlignment: CrossAxisAlignment.start,
+children: [
+Text(
+'Output Format Options',
+style: TextStyle(color: theme.hintColor, fontSize: 11),
+),
+Row(
+children: [
+SizedBox(
+height: 24,
+width: 24,
+child: Checkbox(
+value: _includeSummary,
+activeColor: theme.primaryColor,
+onChanged: (v) =>
+setState(() => _includeSummary = v ?? true),
+),
+),
+const Text(
+' Include File Summary',
+style: TextStyle(fontSize: 12),
+),
+],
+),
+Row(
+children: [
+SizedBox(
+height: 24,
+width: 24,
+child: Checkbox(
+value: _includeStructure,
+activeColor: theme.primaryColor,
+onChanged: (v) =>
+setState(() => _includeStructure = v ?? true),
+),
+),
+const Text(
+' Include Directory Structure',
+style: TextStyle(fontSize: 12),
+),
+],
+),
+],
+),
+],
+),
+],
+),
+),
+),
+const SizedBox(height: 15),
+Text(
+_statusMessage,
+style: const TextStyle(
+color: Color(0xFF606060),
+fontSize: 11,
+fontWeight: FontWeight.w500,
+),
+),
+],
+),
+),
+),
+);
+}
 }
