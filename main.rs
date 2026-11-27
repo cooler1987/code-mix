@@ -6,7 +6,7 @@ use std::ffi::c_void;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead, BufReader, BufWriter, Read, Write};
 use std::os::windows::process::CommandExt;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -960,33 +960,6 @@ enum DocFormat {
     Plain,
 }
 
-fn sanitize_archive_rel_path(raw: &str) -> Option<String> {
-    let mut s = raw.trim().replace('\\', "/");
-    // 剥离 Windows 盘符前缀 (如 C:/)
-    if s.len() >= 2 && s.as_bytes()[1] == b':' {
-        s = s[2..].to_string();
-    }
-    let parts: Vec<&str> = Path::new(&s)
-        .components()
-        .filter_map(|c| match c {
-            Component::Normal(os) => {
-                let part = os.to_string_lossy();
-                if part.is_empty() || part == "." || part == ".." {
-                    None
-                } else {
-                    Some(part.into_owned())
-                }
-            }
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .into_iter()
-        .collect::<Vec<_>>()
-        .leak_free_skip();
-    let _ = parts;
-    None
-}
-
 fn clean_rel_path(raw: &str) -> Option<String> {
     let mut s = raw.trim().replace('\\', "/");
     if s.len() >= 2 && s.as_bytes()[1] == b':' {
@@ -1013,15 +986,6 @@ fn clean_rel_path(raw: &str) -> Option<String> {
         None
     } else {
         Some(clean_parts.join("/"))
-    }
-}
-
-trait UnusedHelper {
-    fn leak_free_skip(self) -> Self;
-}
-impl UnusedHelper for Vec<String> {
-    fn leak_free_skip(self) -> Self {
-        self
     }
 }
 
